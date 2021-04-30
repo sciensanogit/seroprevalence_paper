@@ -9,14 +9,20 @@
 ##%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 ## Load packages
-pkgs <-c("tidyverse", "lubridate", "rstan", "ggpubr", "ggsci", "cowplot", "BelgiumMaps.StatBel", "sf", "openxlsx")
+pkgs <-c("tidyverse", "lubridate", "rstan", "ggpubr", "ggsci", "cowplot", 
+         "openxlsx", "tictoc", "bayesplot")
 lapply(pkgs, require, character.only = TRUE)
 
 ##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ##                          LOAD THE DATA ####
 ##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-## population_table
+##---------------------------------------------------------------------
+## POPULATION DATA
+##---------------------------------------------------------------------
+
+## EXAMPLE OF BELGIAN POPULATION DATA
+## CREATE a population table for BELGIUM
 POP <- read.xlsx("https://statbel.fgov.be/sites/default/files/files/opendata/bevolking%20naar%20woonplaats%2C%20nationaliteit%20burgelijke%20staat%20%2C%20leeftijd%20en%20geslacht/TF_SOC_POP_STRUCT_2020.xlsx")
 POP <- POP %>%
   select(CD_AGE, MS_POPULATION, CD_SEX,
@@ -32,7 +38,7 @@ POP <- POP %>%
   filter(!is.na(age.groups)) %>%
   summarise(pop = sum(population))
 
-## Recode provinces
+## RECODE provinces
 POP$province <- fct_recode(factor(POP$province),
                                      Bru = "Brussels", A = "Provincie Antwerpen",
                                      H = "Provincie Henegouwen", L = "Provincie Limburg",
@@ -41,298 +47,118 @@ POP$province <- fct_recode(factor(POP$province),
                                      VB = "Provincie Vlaams-Brabant", BrW = "Provincie Waals-Brabant",
                                      WV = "Provincie West-Vlaanderen")
 
-## recode to integers
+## RECODE factors to integers as an input for Stan
 POP.table <- POP %>%
   mutate(province = as.character(province)) %>%
-  arrange(age.groups, sex, province) %>%
-  mutate(across(c(age.groups, sex, province), as_factor))
+  arrange(age.groups, sex, province) 
 
-# Create an array using contents of ps_reordered to pass to Stan
-P <- array(data = pop2020.table$pop, 
-           dim=head(as.numeric(lapply(pop2020.table, function(x) length(unique(x)))),-1), 
-           dimnames=lapply(pop2020.table[,1:(length(pop2020.table)-1)], unique))
+POP.table$age.groups <- POP.table$age.groups %>% as_factor() %>% as.integer()
+POP.table$sex <- POP.table$sex %>% as_factor() %>% as.integer()
+POP.table$province <- POP.table$province %>% as_factor() %>% as.integer()
 
-# check that P was assigned correctly by looking at the value of N for a random row
+# CREATE an array using contents of
+P <- array(data = POP.table$pop, 
+           dim=head(as.numeric(lapply(POP.table, function(x) length(unique(x)))),-1), 
+           dimnames=lapply(POP.table[,1:(length(POP.table)-1)], unique))
+
+# CHECK that P was assigned correctly by looking at the value of N for a random row
 dim(P)
 P[1, 1, 1]
 
-## Load the data
-alldat <- read_excel("../../3_Data_analysis/Alltimepoints_newweights.xlsx")
-
-## Recode provinces
-alldat$Province <- fct_recode(factor(alldat$Province),
-                              Bru = "Brussels Capital Region", A = "Antwerp",
-                              H = "Hainaut", L = "Limburg",
-                              Luik = "Liège", Lux = "Luxembourg",
-                              Na = "Namur", OV = "East Flanders",
-                              VB = "Flemish Brabant", Brw = "Walloon Brabant",
-                              WV = "West Flanders")
-
-alldat$agecat10 <- cut(alldat$Age, breaks=c(18, 35, 55, 76),right=F)
-
-## recode to integers
-alldat <- alldat %>%
-  select(age.groups = agecat10, sex = Gender, province = Province, y = Wantai, Series) %>%
-  arrange(age.groups, sex, province) %>%
-  mutate_at(c("age.groups", "sex", "province"), as.factor) %>%
-  mutate_at(c("age.groups", "sex", "province"), as.integer)
-
-alldat$Series <- as.integer(alldat$Series)
-
-## take data from period 1
-example <- alldat %>%
-  filter(Series == "20")
-
-## load population data
-pop2020 <- read_excel("../../1_Data/5_popdata/TF_SOC_POP_STRUCT_2020.xlsx")
-pop2020 <- pop2020[, c("CD_AGE", "MS_POPULATION", "CD_SEX",
-                       "TX_RGN_DESCR_NL", "TX_PROV_DESCR_NL")]
-pop2020 <- pop2020 %>%
-  dplyr::rename(age = CD_AGE , population = MS_POPULATION,
-                sex = CD_SEX, region = TX_RGN_DESCR_NL,
-                province = TX_PROV_DESCR_NL)
+##---------------------------------------------------------------------
+## SEROLOGY DATA
+##---------------------------------------------------------------------
+## LOAD the data
+df <- read_csv("example_data/example_data.csv")
 
 ##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-##                          POPULATION STRATA
+##                          MODEL THE DATA ####
 ##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-# Import Brussels into province-variable
-pop2020$province <- ifelse(is.na(pop2020$province) & pop2020$region == "Brussels Hoofdstedelijk Gewest",
-                           "Brussels", pop2020$province)
+## SAVE results as a list
+seroprot <- list() ## Seroprotection
+seroprev <- list() ## Seroprevalence
 
-## Create strata based on Province, Age, and gender
-pop2020$age.groups <- cut(pop2020$age,breaks=c(18, 35, 55, 75),right=F)
+## DEFINE cut-offs for each outcome
+cutoff_prev <- 1
+cutoff_prot  <- 12
 
-pop2020.table <- pop2020 %>%
-  group_by(age.groups, sex, province) %>%
-  filter(!is.na(age.groups)) %>%
-  summarise(pop = sum(population))
+## CREATE outcome variables based on specified cut-offs
+df$prev <- as.integer(cut(df$y, breaks = c(-Inf, cutoff_prev, Inf), right = FALSE, labels = c("0", "1")))-1
+df$prot <- as.integer(cut(df$y, breaks = c(-Inf, cutoff_prot, Inf), right = FALSE, labels = c("0", "1")))-1
 
-## Recode provinces
-pop2020.table$province <- fct_recode(factor(pop2020.table$province),
-                                     Bru = "Brussels", A = "Provincie Antwerpen",
-                                     H = "Provincie Henegouwen", L = "Provincie Limburg",
-                                     Luik = "Provincie Luik", Lux = "Provincie Luxemburg",
-                                     Na = "Provincie Namen", OV = "Provincie Oost-Vlaanderen",
-                                     VB = "Provincie Vlaams-Brabant", BrW = "Provincie Waals-Brabant",
-                                     WV = "Provincie West-Vlaanderen")
+## LOOP over all time series
+for (i in 1:max(df$series)) {
+  tic("total") ## Keep track of time
+  
+##---------------------------------------------------------------------
+## BAYESIAN ANALYSIS
+##---------------------------------------------------------------------
+  
+  ## filter data
+  sub_df <- df %>%
+    filter(series %in% i)
+  
+  ## adjusted stan model
+  rstan_dat <- list(N = nrow(sub_df), ## Number of observations
+                    y = sub_df$prev, ## Outcome (prevalence or protection)
+                    age = sub_df$age.groups, ## age groups
+                    prov = sub_df$province, ## provinces/regions
+                    sex = sub_df$sex, ## sex
+                    ng_age = max(sub_df$age.groups), ## number of age groups
+                    ng_prov = max(sub_df$province), ## number of regional groups
+                    ng_sex = max(sub_df$sex), ## number of groups for sex
+                    P = P, ## POPULATION ARRAY
+                    tp = 155, ## TRUE POSITIVES
+                    tn = 772, ## TRUE NEGATIVES
+                    fp = 3,   ## FALSE POSITIVES
+                    fn = 0)   ## FALSE NEGATIVES
+  
+  ## use available cores
+  options(mc.cores = parallel::detectCores())
+  
+  ## fit the model
+  fit <- stan(file = 'stan_model.stan', 
+               data = rstan_dat,
+               chains = 5,
+               iter = 10000, 
+               control=list(adapt_delta=0.99), refresh = 100)
+  
+  ##---------------------------------------------------------------------
+  ## CALCULATE RR
+  ##---------------------------------------------------------------------
+  
+  ## extract posteriors
+  fit_mcmc <- extract(fit)
 
-## recode to integers
-pop2020.table <- pop2020.table %>%
-  mutate(province = as.character(province)) %>%
-  arrange(age.groups, sex, province) %>%
-  mutate_at(c("age.groups", "sex", "province"), as.factor) %>%
-  mutate_at(c("age.groups", "sex", "province"), as.integer)
-
-# Create an array using contents of ps_reordered to pass to Stan
-P <- array(data = pop2020.table$pop, 
-           dim=head(as.numeric(lapply(pop2020.table, function(x) length(unique(x)))),-1), 
-           dimnames=lapply(pop2020.table[,1:(length(pop2020.table)-1)], unique))
-
-# check that P was assigned correctly by looking at the value of N for a random row
-dim(P)
-P[1, 1, 1]
-
-##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-##                          SAMPLE STRATA
-##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-##            EASY MODEL (NOT ACCOUNTED FOR SE and SP)
-##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-## easy stan model
-rstan_dat <- list(N = nrow(example),
-                  y = example$y,
-                  age = example$age.groups,
-                  prov = example$province,
-                  sex = example$sex,
-                  ng_age = max(example$age.groups),
-                  ng_sex = max(example$sex),
-                  ng_prov = max(example$province),
-                  P = P)
-
-## optimal use of # cores
-options(mc.cores = parallel::detectCores())
-
-## fit the model
-fit <- stan(file = 'stan_1.stan', data = rstan_dat)
-
-## check the model
-traceplot(fit, pars = c("phi"))
-plot(fit)
-
-## extract posteriors
-fit_mcmc <- extract(fit) 
-mean(fit_mcmc$phi)
-
-##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-##            ADJUSTED MODEL (ACCOUNTED FOR SE and SP)
-##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-## sensitivity and specificity
-study_A <- c(25,0,2,82)
-study_B <- c(78,0,2,300)
-study_C <- c(127,4,27,667)
-
-alldata <- rbind(study_B, study_B, study_C)
-colnames(alldata) <- c("TP", "FP", "FN", "TN")
-tot_res <- colSums(alldata)
-
-## adjusted stan model
-rstan_dat <- list(N = nrow(example),
-                  y = example$y,
-                  age = example$age.groups,
-                  prov = example$province,
-                  sex = example$sex,
-                  ng_age = max(example$age.groups),
-                  ng_sex = max(example$sex),
-                  ng_prov = max(example$province),
-                  P = P,
-                  tp = tot_res["TP"],
-                  tn = tot_res["TN"],
-                  fp = tot_res["FP"],
-                  fn = tot_res["FN"])
-
-## optimal use of # cores
-options(mc.cores = parallel::detectCores())
-
-## fit the model
-fit2 <- stan(file = 'stan_2.stan', 
-             data = rstan_dat,
-             chains = 5,
-             iter = 10000, 
-             control=list(adapt_delta=0.99))
-
-## check the model
-traceplot(fit2, pars = c("phi"))
-bayesplot::rhat(fit2)
-plot(fit2)
-rstan::check_divergences(fit2)
-
-## extract posteriors
-fit_mcmc_2 <- extract(fit2) 
-mean(fit_mcmc_2$phi)
-
-## PREDICT GROUPS
-## Extract posteriod distributions
-beta_age_post <- fit_mcmc_2$beta_age
-beta_sex_post <- fit_mcmc_2$beta_sex
-beta_prov_post <- fit_mcmc_2$beta_prov
-
-## Function for simulating y based on new x for each group
-group_res <- list()
-
-## loop over all groups
-for (i in 1:rstan_dat$ng_age) {
-  for (j in 1:rstan_dat$ng_sex) {
-    for (k in 1:rstan_dat$ng_prov) {
-      
-      ## generate for each option a posterior prediction of seroprevalence
-      lin_comb <- sample(beta_age_post[,i]) + sample(beta_sex_post[,j]) + sample(beta_prov_post[,k])
-      prob <- 1/(1 + exp(-lin_comb))
-      
-      ## save result
-      group_res[[paste0(i, "_", j, "_", k)]] <- data.frame(seroprev = prob, 
-                                                           age = i,
-                                                           sex = j,
-                                                           prov = k)
-      
-    }
-  }
+  ## PREDICT GROUPS
+  ## Extract posterior distributions
+  beta_age_post <- fit_mcmc$beta_age
+  beta_sex_post <- fit_mcmc$beta_sex
+  beta_prov_post <- fit_mcmc$beta_prov
+  
+  ## SOURCE AND ESTIMATE MARGINAL
+  source("RR_est.R") ## script to calculate RR based on obtained output
+  est_all <- est_marginal(pop.table = POP.table, rstan_dat = rstan_dat)
+  
+  ## Finalize timing
+  toc()
 }
 
-group_res <- bind_rows(group_res, .id = "strata")
+##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+##                    CREATE DOCUMPENT WITH OUTPUT ####
+##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-## ESTIMATE RR
-source("RR_est.R")
-est_all <- est_marginal(pop2020.table = pop2020.table, rstan_dat = rstan_dat)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-## What to search for
-ptrn_1 <- "seroprot"
-ptrn_2 <- "seroprev"
-
-## loop over all results
-list.of.seroprot <- list.files(path = "../", pattern = ptrn_1)
-list.of.seroprev <- list.files(path = "../", pattern = ptrn_2)
-
-## save rate and CI
-seroprot_res <- list()
-seroprev_res <- list()
-
-## SEROPROT
-for (f in list.of.seroprot) {
-  print(paste0("Loading ", f))
-  tic("Load the data")
-  ## load the file
-  f_tmp <- load(file = paste0("../",f))
-  toc()
+rmarkdown::render("O:/1_Automation/seroprevalence_paper/README.Rmd")
   
-  tic("Extract data and diagnostics")
-  ## extract timepoint
-  time <- str_split(str_split(f, pattern = "_", simplify = TRUE)[2], pattern = "\\.", simplify = TRUE)[1]
-  
-  ## Extract estimates for seroprot en seroprev
-  stan_samples <- extract(seroprot$adjusted)
-  
-  ## Check diagnosis
-  ### RHATS
-  rhats <- rhat(seroprot$adjusted, pars = c("beta_age", "beta_sex", "beta_prov", 
-                                            "sigma_age", "sigma_prov", "sigma_sex",
-                                            "phi"))
-  ### ESS (Effective sample size)
-  ess <- neff_ratio(seroprot$adjusted, pars = c("beta_age", "beta_sex", "beta_prov", 
-                                                "sigma_age", "sigma_prov", "sigma_sex",
-                                                "phi"))
-  
-  ## save diagnostics
-  diagnostics <- list(rhats, ess)
+ 
+
+
+
+
+
+
+
 
   ## Extract
   est <- tibble(median = median(stan_samples$phi),
@@ -344,67 +170,40 @@ for (f in list.of.seroprot) {
   age <- seroprot[["est_all"]][["age"]]
   prov <- seroprot[["est_all"]][["prov"]]
   
-  seroprot_res[[time]] <- list("diagnostics" = diagnostics, "est" = est, 
+  seroprot_res <- list("diagnostics" = diagnostics, "est" = est, 
                                "sex" = sex, "age" = age, "prov" =  prov)
-  
-  toc()
-  
-  rm(list = f_tmp)
-
-}
 
 ## save the results
 save(file = "../blooddonor_seroprot.Rdata", list = c("seroprot_res"))
 
-## SEROPREV
-for (f in list.of.seroprev) {
-  print(paste0("Loading ", f))
-  tic("Load the data")
-  ## load the file
-  f_tmp <- load(file = paste0("../",f))
-  toc()
-  
-  tic("Extract data and diagnostics")
-  ## extract timepoint
-  time <- str_split(str_split(f, pattern = "_", simplify = TRUE)[2], pattern = "\\.", simplify = TRUE)[1]
-  
-  ## Extract estimates for seroprot en seroprev
-  stan_samples <- extract(seroprev$adjusted)
-  
-  ## Check diagnosis
-  ### RHATS
-  rhats <- rhat(seroprev$adjusted, pars = c("beta_age", "beta_sex", "beta_prov", 
-                                            "sigma_age", "sigma_prov", "sigma_sex",
-                                            "phi"))
-  ### ESS (Effective sample size)
-  ess <- neff_ratio(seroprev$adjusted, pars = c("beta_age", "beta_sex", "beta_prov", 
-                                                "sigma_age", "sigma_prov", "sigma_sex",
-                                                "phi"))
-  
-  ## save diagnostics
-  diagnostics <- list(rhats, ess)
-  
-  ## Extract
-  est <- tibble(median = median(stan_samples$phi),
-                hdill = hdi(stan_samples$phi, credMass = 0.95)[1],
-                hdiul = hdi(stan_samples$phi, credMass = 0.95)[2])
-  
-  ## save as tmp
-  sex <- seroprev[["est_all"]][["sex"]]
-  age <- seroprev[["est_all"]][["age"]]
-  prov <- seroprev[["est_all"]][["prov"]]
-  
-  seroprev_res[[time]] <- list("diagnostics" = diagnostics, "est" = est, 
-                               "sex" = sex, "age" = age, "prov" =  prov)
-  
-  toc()
-  
-  rm(list = f_tmp)
-  
-}
 
-## save the results
-save(file = "../blooddonor_seroprev.Rdata", list = c("seroprev_res"))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 ##                          ANALYSIS ####
