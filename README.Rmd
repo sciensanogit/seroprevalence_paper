@@ -11,25 +11,73 @@ knitr::opts_chunk$set(
 )
 ```
 
-# seroprevalence_paper
+# APPENDIX R-CODE
 
 <!-- badges: start -->
 <!-- badges: end -->
 
-The goal of seroprevalence_paper is to ...
+The goal of the Appendix of R-code is to provide interested readers in more information about the modeling code.
 
-What is special about using `README.Rmd` instead of just `README.md`? You can include R chunks like so:
+This document contains more information on the Bayesian estimation and statistical analysis. The main analysis script (`main_script.R`) contains the R-code that was used to load and restructure the data. The Bayesian model as written in stan can be consulted in the `stan_model.stan`-file.
 
-```{r cars}
-summary(cars)
+## Bayesian MCMC Diagnostics
+
+### Divergence
+
+In a first step, the number of chains that diverged where evaluated using the `rstan::check_divergences`-function:
+`r rstan::check_divergences(fit)`
+
+### Trace plots
+
+A first diagnostic plot is the trace plot, which is a time series plot of the Markov chains. That is, a trace plot shows the evolution of parameter vector over the iterations of one or many Markov chains
+
+```{r quality}
+## check the model
+posterior_fit <- as.array(fit) ## save as array to plot
+pl_age <- mcmc_trace(posterior_fit, regex_pars = c("age"))
+pl_sex <- mcmc_trace(posterior_fit, regex_pars = c("sex"))
+pl_prov <- mcmc_trace(posterior_fit, regex_pars = c("prov"))
 ```
 
-You'll still need to render `README.Rmd` regularly, to keep `README.md` up-to-date. `devtools::build_readme()` is handy for this. You could also use GitHub Actions to re-render `README.Rmd` every time you push. An example workflow can be found here: <https://github.com/r-lib/actions/tree/master/examples>.
+For age, this resulted in the following trace plot:
 
-You can also embed plots, for example:
-
-```{r pressure, echo = FALSE}
-plot(pressure)
+```{r trace_age, fig.width=6}
+pl_age
 ```
 
-In that case, don't forget to commit and push the resulting figure files, so they display on GitHub.
+For sex, this resulted in the following trace plot:
+
+```{r trace_sex, fig.width=6}
+pl_sex
+```
+
+For province, this resulted in the following trace plot:
+
+```{r trace_prov, fig.width=6}
+pl_prov
+```
+
+### R-hat
+
+Another way to evaluate chain convergence to an equilibrium distribution is to compare its behavior to other  initialized chains. This is the motivation for the potential scale reduction statistic, split-$\hat{R}$. The split-$\hat{R}$ statistic measures the ratio of the average variance of draws within each chain to the variance of the pooled draws across chains; if all chains are at equilibrium, these will be the same and split-$\hat{R}$ will be one. If the chains have not converged to a common distribution, the split-$\hat{R}$ statistic will be greater than one (see Gelman et al. 2013, Stan Development Team 2018).
+
+```{r rhat}
+## RHAT STATISTIC
+rhats <- rhat(fit, pars = c("beta_age", "beta_sex", "beta_prov", 
+                                            "sigma_age", "sigma_prov", "sigma_sex"))
+mcmc_rhat(rhats)
+```
+
+### ESS
+
+The effective sample size is an estimate of the number of independent draws from the posterior distribution of the estimand of interest. The $n_{eff}$ metric used in Stan is based on the ability of the draws to estimate the true mean value of the parameter. Because the draws within a Markov chain are not independent if there is autocorrelation, the effective sample size, $n_{eff}$, is usually smaller than the total sample size, N. The larger the ratio of $n_{eff}$ to N the better (see Gelman et al. 2013, Stan Development Team 2018 for more details) .
+
+```{r ess}
+## ESS STATISTIC
+ess <- neff_ratio(fit, pars = c("beta_age", "beta_sex", "beta_prov", 
+                                                "sigma_age", "sigma_prov", "sigma_sex",
+                                                "phi"))
+mcmc_neff(ess, size = 2)  
+```
+
+## Bayesian Output
