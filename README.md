@@ -150,3 +150,26 @@ est <- tibble(median = median(fit_mcmc$phi),
               hdill = hdi(fit_mcmc$phi, credMass = 0.95)[1],
               hdiul = hdi(fit_mcmc$phi, credMass = 0.95)[2])
 ```
+
+Risk ratio’s were calculated by dividing the posterior distribution of
+the Bayesian logistic regression model parameters over a reference
+category, respectively for each independent variable (i.e. age, prov,
+and sex). As an example, the *R**R*-calculation of sex is given by
+
+$P(RR\_{sex}) = \\frac{P(\\beta\_{FEMALE})}{P(\\beta\_{MALE})}$,
+
+where *P*(*β*<sub>*g**e**n**d**e**r*</sub>) equals the posterior
+distribution of the female and male sex respectively, and
+*P*(*R**R*<sub>*s**e**x*</sub>), the posterior distribution of the RR.
+
+``` r
+est_all$sex %>%
+  summarise(RR = median(`1`/`2`),
+            HDI_lower = HDInterval::hdi(`1`/`2`, credMass = 0.95)[1,1],
+            HDI_upper = HDInterval::hdi(`1`/`2`, credMass = 0.95)[2,1]) %>%
+  mutate(`Category` = "Female (reference Male)") %>%
+  select(Category, RR, `HDI (lower)` = HDI_lower, `HDI (upper)` = HDI_lower) %>%
+  flextable() %>%
+  colformat_double(digits = 3) %>%
+  autofit()
+```
