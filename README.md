@@ -7,13 +7,49 @@
 <!-- badges: end -->
 
 The goal of the Appendix of R-code is to provide interested readers in
-more information about the modeling code.
+more information about the Bayesian model and modeling code.
 
 This document contains more information on the Bayesian estimation and
 statistical analysis. The main analysis script (`main_script.R`)
 contains the R-code that was used to load and restructure the data. The
 Bayesian model as written in stan can be consulted in the
 `stan_model.stan`-file.
+
+## Bayesian methods
+
+In this paper, our goal is to estimate the true underlying
+seroprevalence of the population  ≥ 18 and  ≤ 65 years old as measured
+every two weeks, *w* in Belgium, denoted *p*<sub>*w*</sub><sup>\*</sup>
+(*w* = 1, …, *W* = 20).
+
+We start by estimating the probability that each person in the
+serosurvey is seropositive using a Bayesian logistic regression model
+that accounts for the sensitivity and specificity of the ELISA assay,
+each individual’s age, sex, and current province, iterated over each two
+weeks they were sampled:
+
+where *x*<sub>*i*</sub> is the result of the IgG ELISA (in primary
+analyses) for the *i*th person (*i* = 1, …, *N*= 129) in the serosurvey.
+The sensitivity, *θ*<sup>+</sup>, is determined using *n*<sup>+</sup>
+RT-PCR positive controls from the lab validation study, of which
+*x*<sup>+</sup> tested positive. The specificity, *θ*<sup>−</sup> , is
+determined using *n*<sup>−</sup> pre-pandemic negative controls, of
+which *x*<sup>−</sup> tested positive.
+
+The probability of observing a diagnostic positive is a function of the
+true positive rate and the false negative rate with regards to the true
+underlying probability of seropositivity *p*<sub>*i*</sub> for that
+person. This probability itself is a function of covariates **X**, which
+consists of sex, age categories, and week of study, and their
+coefficients **β**, and a random effect for household, *α*<sub>*h*</sub>
+(*h* = 1, …, *H*= 129), with variance *σ*<sup>2</sup>. We used naive
+priors on all parameters to allow for an exploration of the parameter
+space. The priors on the sensitivity and specificity were flat from 0 to
+1, equivalent to *U**n**i**f**o**r**m*(0, 1) or *B**e**t**a*(1, 1). We
+used weak *N**o**r**m**a**l*(0, 3) priors for the logistic regression
+coefficients **β**. The prior on the standard deviation of the household
+effect, *σ*, was flat from 0 to infinity (we tested a positive
+half-Normal and it did not affect estimates).
 
 ## Bayesian MCMC Diagnostics
 
@@ -104,3 +140,13 @@ mcmc_neff(ess, size = 2)
 ![](README_files/figure-gfm/ess-1.png)<!-- -->
 
 ## Bayesian Output
+
+Bayesian parameter estimation was performed by calculating the median of
+the posterior draws of *ϕ*. The 95% CI was calculated based on the
+Highest (Posterior) Density Interval (HDI) of *ϕ*.
+
+``` r
+est <- tibble(median = median(fit_mcmc$phi),
+              hdill = hdi(fit_mcmc$phi, credMass = 0.95)[1],
+              hdiul = hdi(fit_mcmc$phi, credMass = 0.95)[2])
+```

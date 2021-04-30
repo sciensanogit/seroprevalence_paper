@@ -16,9 +16,34 @@ knitr::opts_chunk$set(
 <!-- badges: start -->
 <!-- badges: end -->
 
-The goal of the Appendix of R-code is to provide interested readers in more information about the modeling code.
+The goal of the Appendix of R-code is to provide interested readers in more information about the Bayesian model and modeling code.
 
 This document contains more information on the Bayesian estimation and statistical analysis. The main analysis script (`main_script.R`) contains the R-code that was used to load and restructure the data. The Bayesian model as written in stan can be consulted in the `stan_model.stan`-file.
+
+## Bayesian methods
+
+In this paper, our goal is to estimate the true underlying seroprevalence of the population $\geq 18$  and $\leq 65$ years old as measured every two weeks, $w$ in Belgium, denoted $p^*_w$ ($w=1,\dots,W=20$).
+
+We start by estimating the probability that each person in the serosurvey is seropositive using a Bayesian logistic regression model that accounts for the sensitivity and specificity of the ELISA assay, each individual's age, sex, and current province, iterated over each two weeks they were sampled:
+
+\begin{align*}
+  x_{i} &\sim Bernoulli(p_i \theta^+ + (1-p_i) * (1-\theta^-)) \\
+  logit(p_i) &= \alpha_h + \mathbf{X}_i \boldsymbol{\beta} \\
+  \alpha_h &\sim Normal(0, \sigma^2) \\
+  x^+ &\sim Binomial(n^+, \theta^+) \\
+  x^- &\sim Binomial(n^-, 1-\theta^-)
+\end{align*}
+
+where $x_i$ is the result of the IgG ELISA (in primary analyses) for the $i$th person ($i=1,\dots,N=$ `r nrow(df)`) in the serosurvey.
+The sensitivity, $\theta^+$, is determined using $n^+$ RT-PCR positive controls from the lab validation study, of which $x^+$ tested positive.
+The specificity, $\theta^-$ , is determined using $n^-$ pre-pandemic negative controls, of which $x^-$ tested positive.
+
+The probability of observing a diagnostic positive is a function of the true positive rate and the false negative rate with regards to the true underlying probability of seropositivity $p_i$ for that person.
+This probability itself is a function of covariates $\mathbf{X}$, which consists of sex, age categories, and week of study, and their coefficients $\boldsymbol{\beta}$, and a random effect for household, $\alpha_h$ ($h=1,\dots, H=$ `r nrow(df)`), with variance $\sigma^2$.
+We used naive priors on all parameters to allow for an exploration of the parameter space.
+The priors on the sensitivity and specificity were flat from 0 to 1, equivalent to $Uniform(0,1)$ or $Beta(1,1)$.
+We used weak $Normal(0,3)$ priors for the logistic regression coefficients $\boldsymbol{\beta}$.
+The prior on the standard deviation of the household effect, $\sigma$, was flat from 0 to infinity (we tested a positive half-Normal and it did not affect estimates).
 
 ## Bayesian MCMC Diagnostics
 
@@ -81,3 +106,13 @@ mcmc_neff(ess, size = 2)
 ```
 
 ## Bayesian Output
+
+Bayesian parameter estimation was performed by calculating the median of the posterior draws of $\phi$. The 95% CI was calculated based on the Highest (Posterior) Density Interval (HDI) of $\phi$.
+
+```{r parest}
+est <- tibble(median = median(fit_mcmc$phi),
+              hdill = hdi(fit_mcmc$phi, credMass = 0.95)[1],
+              hdiul = hdi(fit_mcmc$phi, credMass = 0.95)[2])
+```
+
+

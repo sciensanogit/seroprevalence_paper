@@ -10,7 +10,7 @@
 
 ## Load packages
 pkgs <-c("tidyverse", "lubridate", "rstan", "ggpubr", "ggsci", "cowplot", 
-         "openxlsx", "tictoc", "bayesplot")
+         "openxlsx", "tictoc", "bayesplot", "HDInterval")
 lapply(pkgs, require, character.only = TRUE)
 
 ##+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -151,7 +151,6 @@ for (i in 1:max(df$series)) {
 
 rmarkdown::render("O:/1_Automation/seroprevalence_paper/README.Rmd")
   
- 
 
 
 
@@ -160,10 +159,8 @@ rmarkdown::render("O:/1_Automation/seroprevalence_paper/README.Rmd")
 
 
 
-  ## Extract
-  est <- tibble(median = median(stan_samples$phi),
-            hdill = hdi(stan_samples$phi, credMass = 0.95)[1],
-            hdiul = hdi(stan_samples$phi, credMass = 0.95)[2])
+
+
   
   ## save as tmp
   sex <- seroprot[["est_all"]][["sex"]]
